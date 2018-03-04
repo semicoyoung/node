@@ -190,3 +190,137 @@ timeout
 ### understanding ``` process.nextTick()```
 
 - 你可能已经注意到 ```process.nextTick()```没有出现在上图中，虽然它也是异步API的一部分。这是因为 ```process.nextTick()```从技术上来说说并不是事件循环的一部分。相反， ``` nextTickQueue``` 将在当前操作完成后被处理，而不管事件循环的当前阶段
+
+- 回看上图，任何时候在一个给定的阶段，你调用 ```process.nextTick()```, 所有传递给```process.nextTick()```的回调都会在 event loop 事件循环继续往下走之前被解决掉。这样做会产生一些糟糕的情景，因此它允许你通过递归调用```process.nextTick()```来“饥饿”你的 I/O，这会阻止事件循环往下走到 poll phase 轮询阶段。
+
+### why would that be allowed？
+
+- 为什么 Node.js 里面会包含这样的东西呢？部分原因是因为是一种设计理念，也就是即使是不需要的，API也应该始终是异步的。以下面的代码片段为例：
+
+```
+function apiCall(arg, callback) {
+  if (typeof arg !== 'string')
+    return process.nextTick(callback,
+                            new TypeError('argument should be string'));
+}
+```
+
+- 上面代码中，对参数进行检查，如果参数不正确，它会把错误传递给回调函数。最近更新的API允许将参数传递给 ```process.nextTick()```，以允许它在回调之后传递的任何参数作为参数传播给回调函数，因此你不必嵌套函数。
+
+- 我们在做的是将错误传回给用户，但仅在运行用户剩余的代码执行之后。通过使用```process.nextTick()```我们可以保证```apiCall()```总是在用户代码的其他剩余部分之后并且允许继续执行事件循环之前运行它的回调。为了达到这个目的，JS调用栈被允许展开然后立即执行被提供的回调，该回调允许对```process.nextTick()```进行递归调用，而不会出现```RangeError: Maximun call stack size excedd from V8```.
+
+- 这种理念可能会导致一些潜在的问题。举例如下：
+
+```
+let bar;
+
+//this has an asynchronous signature, but calls callback synchronously
+
+function someAsyncApiCall(callback) {callback();}
+
+//the callback is called before 'someAsyncApiCall' completes;
+
+someAsyncApiCall(()=>{
+	//since someAsyncApiCall has completed, bar hasn`t been assigned any value
+	console.log('bar', bar); //undefined
+});
+
+bar=1;
+```
+- 用户定义```someAsyncApiCall()```来有一个异步标签，但是它事实上是同步操作的。当它被调用的二十号，提供给```someAsyncApiCall()```的回调在事件循环的同一个阶段被调用，因为```someAsyncApiCall()```事实上并没有异步地做任何的事情。结果就是，回调尝试引用bar，尽管bar在当前作用域中可能还没有那个值，因为这个脚本还没有被跑完。
+
+- 通过将回调放置在```process.nextTick()```中，脚本依然具有运行到完成的能力，允许在调用回调之前对所有的变量，函数等进行初始化。它也有不允许事件循环继续执行的优势。在事件循环被继续执行之前对用户抛错也是有用的。下面是之前使用```process.nextTick()```的例子：
+
+```
+let bar;
+
+function someAsyncApiCall(callback) {
+  process.nextTick(callback);
+}
+
+someAsyncApiCall(() => {
+  console.log('bar', bar); // 1
+});
+
+bar = 1;
+```
+
+- 下面是真实世界的一个列子：
+
+```
+const server = net.createServer(() => {}).listen(8080);
+
+server.on('listening', () => {});
+```
+
+- 当只有一个端口通过时，该端口被立刻绑定。因此，```listening```回调可以被立即调用。问题是```.on('listening')```回调在那个时刻还没有被设置。
+
+- 为解决这个问题，```listening```事件在```nextTick()```中排队等待脚本执行到完成。这样允许用户设置任何他们想要的任何事件处理程序。
+
+## ```process.nextTick()``` vs ```setImmediate()```
+
+- 我们当前有两个对用户来说相似的调用，但是他们的名字让人困惑：
+	- ```process.nextTick()```在同一阶段触发
+	- ```setImmediate()```在接下来的迭代或者事件循环的'tick'中触发
+- 实质上，这两个名字应该互换。```process.nextTick()```比```setImmediate()```更快触发，但这是过去的不能更改的人造物。做出这个更换的话，可能会对npm的包造成巨大的潜在风险。每一天新的模块都被添加，意味着我们每等一天，更多的潜在挂机就是发生。尽管名字让人困惑，但名字本身不会改变。
+
+- 建议开发者在所有情况下都使用```setImmediate()```因为它更容易推理（并且它导致代码和更广分的环境兼容，比如 bower JS）.
+
+## why use ```process.nextTick()```
+
+- 有两个重要原因：
+	1. 允许用户处理错误，清理任何他们不需要的资源，或者可能在事件循环继续执行之前再尝试请求一次。
+	2. 有时候允许回调在调用栈解除后，但是事件循环继续执行之前运行。
+
+- 一个例子是匹配用户的期望。简单例子如下：
+
+```
+const server = net.createServer();
+server.on('connection', (conn) => { });
+
+server.listen(8080);
+server.on('listening', () => { });
+
+```
+- 假设```listen()```在事件循环开始的时候运行，但是listening回调被放在一个```setImmediate()```中。除非域名已经通过，否则将会立即绑定到端口。为了事件循环继续进行，它必须进入到 poll phase 轮询阶段，这意味着必须有一个非零的机会可以接到链接，允许在监听到事件之前触发链接事件。
+
+- 另一个例子，运行一个从 ```EventEmitter```继承出来的函数的构造函数，并且在构造体内调用该一个事件
+
+```
+const EventEmitter = require('events');
+const util = require('util');
+
+function MyEmitter() {
+  EventEmitter.call(this);
+  this.emit('event');
+}
+util.inherits(MyEmitter, EventEmitter);
+
+const myEmitter = new MyEmitter();
+myEmitter.on('event', () => {
+  console.log('an event occurred!');
+});
+```
+
+- 你不能从构造体中立即发射事件，因为脚本还没有执行到用户标记给事件的回调的那个点。因此，在构造体自身，你可以在构造体完成之后使用```process.nextTick()```来设置一个回调来发射事件，这样就提供了期望的结果：
+
+```
+const EventEmitter = require('events');
+const util = require('util');
+
+function MyEmitter() {
+  EventEmitter.call(this);
+
+  // use nextTick to emit the event once a handler is assigned
+  process.nextTick(() => {
+    this.emit('event');
+  });
+}
+util.inherits(MyEmitter, EventEmitter);
+
+const myEmitter = new MyEmitter();
+myEmitter.on('event', () => {
+  console.log('an event occurred!');
+});
+```
+	
