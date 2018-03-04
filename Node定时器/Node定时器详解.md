@@ -80,5 +80,23 @@ Promise.resolve().then(() => console.log(4));
 
 ```process.nextTick```这个名字有点误导，它是在本轮循环执行的，而且是所有异步任务里面最快执行的。
 
-Node执行完所有同步任务
-完所有同步任
+Node 执行完所有同步任务，接下来就会执行process.nextTick的任务队列。所以，下面这行代码是第二个输出结果。
+
+```
+process.nextTick(()=> console.log(3));
+```
+
+基本上，如果你希望异步任务尽可能快地执行，那就使用process.nextTick。
+
+# 四 微任务microTask
+
+根据语言规格，Promise对象的回调函数，会进入异步任务里面的"微任务"（microtask）队列。
+
+微任务队列追加在process.nextTick队列的后面，也属于本轮循环。所以，下面的代码总是先输出3，再输出4。
+
+```
+process.nextTick(() => console.log(3));
+Promise.resolve().then(() => console.log(4));
+// 3
+// 4
+```
