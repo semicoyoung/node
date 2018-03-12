@@ -44,7 +44,7 @@
 
 ## 阶段概述
 
-- <strong>timers: </strong> 这个阶段执行被 ``` setTimeout() ``` 和 ``` setInterval() ``` 调度的回调
+- <strong>timers: </strong> 这个阶段执行被 ``` setTimeout() ``` 和 ``` setInterval() ``` 调度的回调(执行的是到期的回调，还没到期的不处理)
 - <strong>I/O callbacks: </strong> 执行几乎所有的回调，除了关闭回调，定时器计划的回调和 ``` setImmediate() ``` 之外的。
 - <strong>idle, prepare: </strong> 只被内部调用
 - <strong>poll: </strong> 检索(或者说取回)新的 I/O 事件；适当时节点将在此处阻塞。
