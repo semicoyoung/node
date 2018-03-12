@@ -404,7 +404,7 @@ MaybeLocal<Value> AsyncWrap::MakeCallback(const Local<Function> cb,
 }
 ```
 
-AsyncWrap类是异步操作的封装，它是一个顶级的类，TimerWrap、TcpWrap等封装异步的类都继承了它，这意味着这些类封装异步操作的时候都会调用MakeCallback()。至此真相大白了，uv_run()中的回调都是经过AsyncWrap::MakeCallback()包装过的，因此回调执行完毕之后都会执行process.nextTick()的回调了，与文档的描述是相符合的。整理一下_tickCallback()的转移并最终被调用的流程
+AsyncWrap类是异步操作的封装，它是一个顶级的类，TimerWrap、TcpWrap等封装异步的类都继承了它，这意味着这些类封装异步操作的时候都会调用MakeCallback()。<strong>至此真相大白了，uv_run()中的回调都是经过AsyncWrap::MakeCallback()包装过的，因此回调执行完毕之后都会执行process.nextTick()的回调了，与文档的描述是相符合的</strong>。整理一下_tickCallback()的转移并最终被调用的流程
 
 在js层面
 
